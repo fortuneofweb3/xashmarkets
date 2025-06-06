@@ -27,14 +27,16 @@ if (!CLIENT_ID || !CLIENT_SECRET || !process.env.SESSION_SECRET) {
 const allowedOrigins = [
   'https://dev.fun',
   'https://cdn.dev.fun',
-  'https://dev.fun/p/93ea680b334bd848c300'
+  'https://dev.fun/p/93ea680b334bd848c300',
+  'https://2-19-8-sandpack.codesandbox.io' // Temporary for testing
 ];
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      console.error(`CORS blocked for origin: ${origin}`);
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
     }
   },
   credentials: true
@@ -255,12 +257,12 @@ async function fetchLikedTweetsForAllUsers() {
         continue;
       }
 
-      accessToken = rectified.accessToken;
+      accessToken = refreshed.accessToken;
       tokens[i] = {
         ...user,
-        accessToken: rectified.accessToken,
-        refreshToken: rectified.refreshToken,
-        expiresIn: rectified.expiresIn,
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresIn: refreshed.expiresIn,
         createdAt: Date.now(),
       };
       await saveTokens(tokens);
