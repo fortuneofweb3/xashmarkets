@@ -15,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 // X app credentials (from environment variables)
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI || 'https://your-app-name.onrender.com/callback';
+const REDIRECT_URI = process.env.REDIRECT_URI || 'https://xashmarkets.com/callback';
 
 // Token storage
 const TOKEN_FILE = 'tokens.json';
@@ -104,7 +104,8 @@ app.get('/auth/callback', async (req, res) => {
       await saveTokens(tokens);
     }
 
-    res.json({ message: 'Authentication successful', userId, username: user.data.username });
+    // Redirect to client site with user data
+    res.redirect(`https://your-other-site.com?userId=${userId}&username=${encodeURIComponent(user.data.username)}`);
   } catch (error) {
     res.status(500).json({ error: `Error completing OAuth 2.0: ${error.message}` });
   }
