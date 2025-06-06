@@ -64,7 +64,7 @@ async function loadTokens() {
       await fs.writeFile(TOKEN_FILE, '[]');
       return [];
     }
-    console.error('Error loading tokens:', error.message);
+    console.error('Error loading tokens:', error.message, error.stack);
     return [];
   }
 }
@@ -73,7 +73,7 @@ async function saveTokens(tokens) {
   try {
     await fs.writeFile(TOKEN_FILE, JSON.stringify(tokens, null, 2));
   } catch (error) {
-    console.error('Error saving tokens:', error.message);
+    console.error('Error saving tokens:', error.message, error.stack);
   }
 }
 
@@ -93,10 +93,10 @@ app.get('/auth/login', async (req, res) => {
       throw new Error('Missing CLIENT_ID or CLIENT_SECRET');
     }
     const client = new TwitterApi({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
-    
-    // Verify the method exists
+
+    // Check for generateOAuth2AuthUrl
     if (typeof client.generateOAuth2AuthUrl !== 'function') {
-      throw new Error('generateOAuth2AuthUrl is not a function in twitter-api-v2');
+      throw new Error('generateOAuth2AuthUrl is not available. Ensure twitter-api-v2 is version 1.12.0 or higher.');
     }
 
     const codeVerifier = generateCodeVerifier();
@@ -145,7 +145,8 @@ app.get('/auth/callback', async (req, res) => {
       await saveTokens(tokens);
     }
 
-    res.redirect(`https://dev.fun?userId=${userId}&username=${encodeURIComponent(user.data.username)}`);
+    // Redirect to client site
+    res.redirect(`https://cdn.dev.fun?userId=${userId}&username=${encodeURIComponent(user.data.username)}`);
   } catch (error) {
     console.error('Error in /auth/callback:', error.message, error.stack);
     res.status(500).json({ error: `Error completing OAuth 2.0: ${error.message}` });
@@ -254,12 +255,12 @@ async function fetchLikedTweetsForAllUsers() {
         continue;
       }
 
-      accessToken = refreshed.accessToken;
+      accessToken = rectified.accessToken;
       tokens[i] = {
         ...user,
-        accessToken: refreshed.accessToken,
-        refreshToken: refreshed.refreshToken,
-        expiresIn: refreshed.expiresIn,
+        accessToken: rectified.accessToken,
+        refreshToken: rectified.refreshToken,
+        expiresIn: rectified.expiresIn,
         createdAt: Date.now(),
       };
       await saveTokens(tokens);
