@@ -12,25 +12,47 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// X app credentials (from environment variables)
+// X app credentials
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const REDIRECT_URI = process.env.REDIRECT_URI || 'https://xashmarkets.com/callback';
+const REDIRECT_URI = process.env.REDIRECT_URI || 'https://xashmarkets.onrender.com/callback';
 
-// Token storage
-const TOKEN_FILE = 'tokens.json';
+// Validate environment variables
+if (!CLIENT_ID || !CLIENT_SECRET || !process.env.SESSION_SECRET) {
+  console.error('Missing required environment variables: CLIENT_ID, CLIENT_SECRET, or SESSION_SECRET');
+  process.exit(1);
+}
+
+// CORS configuration
+const allowedOrigins = [
+  'https://dev.fun',
+  'https://cdn.dev.fun',
+  'https://dev.fun/p/93ea680b334bd848c300'
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true
+}));
 
 // Middleware
 app.use(express.json());
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*', credentials: true }));
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || 'your-secret-key',
+    secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: { secure: process.env.NODE_ENV === 'production' },
   })
 );
+
+// Token storage
+const TOKEN_FILE = 'tokens.json';
 
 // Initialize token storage
 async function loadTokens() {
@@ -38,12 +60,21 @@ async function loadTokens() {
     const data = await fs.readFile(TOKEN_FILE, 'utf8');
     return JSON.parse(data);
   } catch (error) {
+    if (error.code === 'ENOENT') {
+      await fs.writeFile(TOKEN_FILE, '[]');
+      return [];
+    }
+    console.error('Error loading tokens:', error.message);
     return [];
   }
 }
 
 async function saveTokens(tokens) {
-  await fs.writeFile(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+  try {
+    await fs.writeFile(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+  } catch (error) {
+    console.error('Error saving tokens:', error.message);
+  }
 }
 
 // Generate PKCE code verifier and challenge
@@ -57,11 +88,20 @@ function generateCodeChallenge(verifier) {
 
 // OAuth 2.0 PKCE login
 app.get('/auth/login', async (req, res) => {
-  const client = new TwitterApi({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
-  const codeVerifier = generateCodeVerifier();
-  const codeChallenge = generateCodeChallenge(codeVerifier);
-
   try {
+    if (!CLIENT_ID || !CLIENT_SECRET) {
+      throw new Error('Missing CLIENT_ID or CLIENT_SECRET');
+    }
+    const client = new TwitterApi({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
+    
+    // Verify the method exists
+    if (typeof client.generateOAuth2AuthUrl !== 'function') {
+      throw new Error('generateOAuth2AuthUrl is not a function in twitter-api-v2');
+    }
+
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = generateCodeChallenge(codeVerifier);
+
     const authUrl = client.generateOAuth2AuthUrl({
       redirect_uri: REDIRECT_URI,
       scope: ['tweet.read', 'users.read', 'like.read', 'offline.access'],
@@ -71,8 +111,10 @@ app.get('/auth/login', async (req, res) => {
     });
 
     req.session.codeVerifier = codeVerifier;
+    console.log('Generated auth URL:', authUrl);
     res.json({ authUrl });
   } catch (error) {
+    console.error('Error in /auth/login:', error.message, error.stack);
     res.status(500).json({ error: `Error initiating OAuth 2.0: ${error.message}` });
   }
 });
@@ -82,13 +124,12 @@ app.get('/auth/callback', async (req, res) => {
   const { code, state } = req.query;
   const { codeVerifier } = req.session;
 
-  if (!code || !codeVerifier) {
-    return res.status(400).json({ error: 'Missing code or code verifier' });
-  }
-
-  const client = new TwitterApi({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
-
   try {
+    if (!code || !codeVerifier) {
+      throw new Error('Missing code or code verifier');
+    }
+
+    const client = new TwitterApi({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
     const { accessToken, refreshToken, expiresIn, client: userClient } = await client.loginWithOAuth2({
       code,
       codeVerifier,
@@ -104,18 +145,23 @@ app.get('/auth/callback', async (req, res) => {
       await saveTokens(tokens);
     }
 
-    // Redirect to client site with user data
-    res.redirect(`https://your-other-site.com?userId=${userId}&username=${encodeURIComponent(user.data.username)}`);
+    res.redirect(`https://dev.fun?userId=${userId}&username=${encodeURIComponent(user.data.username)}`);
   } catch (error) {
+    console.error('Error in /auth/callback:', error.message, error.stack);
     res.status(500).json({ error: `Error completing OAuth 2.0: ${error.message}` });
   }
 });
 
 // Get all authenticated users
 app.get('/users', async (req, res) => {
-  const tokens = await loadTokens();
-  const users = tokens.map(({ userId, username, name }) => ({ userId, username, name }));
-  res.json({ users });
+  try {
+    const tokens = await loadTokens();
+    const users = tokens.map(({ userId, username, name }) => ({ userId, username, name }));
+    res.json({ users });
+  } catch (error) {
+    console.error('Error in /users:', error.message, error.stack);
+    res.status(500).json({ error: `Error fetching users: ${error.message}` });
+  }
 });
 
 // Get liked posts for a specific user
@@ -132,22 +178,27 @@ app.get('/likes/:userId', async (req, res) => {
   const isExpired = Date.now() >= user.createdAt + user.expiresIn * 1000;
 
   if (isExpired) {
-    const client = new TwitterApi({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
-    const refreshed = await refreshAccessToken(client, user.refreshToken);
-    if (!refreshed) {
-      return res.status(401).json({ error: `Failed to refresh token for user ID ${userId}` });
-    }
+    try {
+      const client = new TwitterApi({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET });
+      const refreshed = await refreshAccessToken(client, user.refreshToken);
+      if (!refreshed) {
+        return res.status(401).json({ error: `Failed to refresh token for user ID ${userId}` });
+      }
 
-    accessToken = refreshed.accessToken;
-    const index = tokens.findIndex((t) => t.userId === userId);
-    tokens[index] = {
-      ...user,
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresIn: refreshed.expiresIn,
-      createdAt: Date.now(),
-    };
-    await saveTokens(tokens);
+      accessToken = refreshed.accessToken;
+      const index = tokens.findIndex((t) => t.userId === userId);
+      tokens[index] = {
+        ...user,
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken,
+        expiresIn: refreshed.expiresIn,
+        createdAt: Date.now(),
+      };
+      await saveTokens(tokens);
+    } catch (error) {
+      console.error('Error refreshing token:', error.message, error.stack);
+      return res.status(500).json({ error: `Error refreshing token: ${error.message}` });
+    }
   }
 
   const client = new TwitterApi(accessToken).readOnly;
@@ -165,6 +216,7 @@ app.get('/likes/:userId', async (req, res) => {
       count: tweets.data ? tweets.data.length : 0,
     });
   } catch (error) {
+    console.error('Error in /likes:', error.message, error.stack);
     res.status(500).json({ error: `Error fetching likes for user ID ${userId}: ${error.message}` });
   }
 });
@@ -174,7 +226,7 @@ async function refreshAccessToken(client, refreshToken) {
     const { accessToken, refreshToken: newRefreshToken, expiresIn } = await client.refreshOAuth2Token(refreshToken);
     return { accessToken, refreshToken: newRefreshToken, expiresIn };
   } catch (error) {
-    console.error('Error refreshing token:', error.message);
+    console.error('Error refreshing token:', error.message, error.stack);
     return null;
   }
 }
@@ -234,7 +286,7 @@ async function fetchLikedTweetsForAllUsers() {
         console.log(`No liked posts found for user ID ${user.userId}.`);
       }
     } catch (error) {
-      console.error(`Error for user ID ${user.userId}:`, error.message);
+      console.error(`Error for user ID ${user.userId}:`, error.message, error.stack);
     }
   }
 }
